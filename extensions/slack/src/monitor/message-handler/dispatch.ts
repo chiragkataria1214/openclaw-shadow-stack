@@ -4,6 +4,7 @@ import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-run
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
+import { onAgentEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
@@ -444,6 +445,54 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }
         };
 
+  // ---------------------------------------------------------------------------
+  // Live tool-status → Slack typing indicator bridge.
+  // Listens for agent tool events and updates the thread status so the user
+  // sees what the agent is actually doing (e.g. "Running web search...").
+  // ---------------------------------------------------------------------------
+  const toolStatusLabel = (name: string): string => {
+    const labels: Record<string, string> = {
+      web_search: "Searching the web...",
+      WebSearch: "Searching the web...",
+      brave_search: "Searching the web...",
+      read: "Reading file...",
+      Read: "Reading file...",
+      write: "Writing file...",
+      Write: "Writing file...",
+      edit: "Editing file...",
+      Edit: "Editing file...",
+      grep: "Searching codebase...",
+      Grep: "Searching codebase...",
+      glob: "Finding files...",
+      Glob: "Finding files...",
+      bash: "Running command...",
+      Bash: "Running command...",
+      execute_command: "Running command...",
+      list_directory: "Browsing files...",
+      web_fetch: "Fetching webpage...",
+      WebFetch: "Fetching webpage...",
+      sessions_send: "Sending message...",
+      slack_send: "Sending Slack message...",
+      discord_send: "Sending Discord message...",
+    };
+    return labels[name] || `Running ${name}...`;
+  };
+
+  const unsubToolEvents = onAgentEvent((evt) => {
+    if (evt.stream !== "tool" || !didSetStatus || !statusThreadTs) return;
+    const phase = evt.data?.phase as string | undefined;
+    const toolName = evt.data?.name as string | undefined;
+    if (phase === "start" && toolName) {
+      ctx
+        .setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: toolStatusLabel(toolName),
+        })
+        .catch(() => {});
+    }
+  });
+
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
@@ -471,6 +520,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   await draftStream.flush();
   draftStream.stop();
+  unsubToolEvents();
   markDispatchIdle();
 
   // -----------------------------------------------------------------------

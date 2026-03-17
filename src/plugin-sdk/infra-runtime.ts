@@ -1,5 +1,6 @@
 // Public runtime/transport helpers for plugins that need shared infra behavior.
 
+export * from "../infra/agent-events.js";
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
